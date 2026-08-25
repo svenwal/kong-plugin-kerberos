@@ -1,0 +1,111 @@
+name: kerberos-auth-test
+
+services:
+  kdc:
+    build: ./kdc
+    networks:
+      default:
+        aliases: [kdc.example.test]
+    volumes:
+      - keytabs:/keytabs
+      - ./krb5.conf:/etc/krb5.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /keytabs/.ready && pgrep krb5kdc >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  upstream:
+    image: traefik/whoami:latest
+    command: ["--port=80", "--verbose"]
+    networks:
+      default:
+        aliases: [upstream.example.test]
+
+  upstream-krb:
+    build: ./upstream-krb
+    depends_on:
+      kdc:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: [secure.example.test]
+    volumes:
+      - ./krb5.conf:/etc/krb5.conf:ro
+      - keytabs:/keytabs:ro
+
+  kong:
+    build:
+      context: ./kong
+      args:
+        BASE_IMAGE: ${KONG_IMAGE:-kong/kong-gateway:3.14}
+    depends_on:
+      kdc:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: [kong.example.test]
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
+      KONG_PLUGINS: "bundled,kerberos-auth"
+      KONG_LUA_PACKAGE_PATH: "/opt/kong-plugin/?.lua;;"
+      # One worker keeps the worker-local GSSAPI credential and token caches
+      # deterministic across requests in the test suite.
+      KONG_NGINX_WORKER_PROCESSES: "1"
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_LOG_LEVEL: "${KONG_LOG_LEVEL:-info}"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+    volumes:
+      - ../kong:/opt/kong-plugin/kong:ro
+      - ./kong/kong.yml:/kong/kong.yml:ro
+      - ./krb5.conf:/etc/krb5.conf:ro
+      - keytabs:/keytabs:ro
+    ports:
+      - "${KONG_PROXY_PORT:-18000}:8000"
+      - "${KONG_ADMIN_PORT:-18001}:8001"
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  client:
+    build: ./client
+    depends_on:
+      kdc:
+        condition: service_healthy
+      kong:
+        condition: service_healthy
+      upstream:
+        condition: service_started
+      upstream-krb:
+        condition: service_started
+    networks:
+      default:
+        aliases: [client.example.test]
+    volumes:
+      - ./client:/suite:ro
+      - ./cases:/suite-cases:ro
+      - ./krb5.conf:/etc/krb5.conf:ro
+      - keytabs:/keytabs:ro
+    environment:
+      KONG_PROXY: "http://kong.example.test:8000"
+      KONG_ADMIN: "http://kong.example.test:8001"
+      REALM: "EXAMPLE.TEST"
+      USER_PASSWORD: "kerberos123"
+      CASES_DIR: "/suite-cases"
+      ONLY: "${ONLY:-}"
+
+volumes:
+  keytabs:
+
+networks:
+  default:
+    name: kerberos-auth-test

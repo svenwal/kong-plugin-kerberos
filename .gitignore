@@ -1,0 +1,3 @@
+*.keytab
+*.rock
+.DS_Store

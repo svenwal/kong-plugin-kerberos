@@ -1,0 +1,297 @@
+_format_version: "3.0"
+
+# Every route below points at the same echo upstream and differs only in how
+# kerberos-auth is configured, so each E2E case can target one behaviour.
+
+services:
+  - name: echo
+    url: http://upstream.example.test
+    routes:
+      # Default configuration: strip realm, map to consumer.username, 403 when
+      # the principal is not a known consumer.
+      - name: default
+        paths: ["/default"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              krb5_config: /etc/krb5.conf
+
+      # Authentication only: proxy even when no consumer matches.
+      - name: allow-unmapped
+        paths: ["/allow-unmapped"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              consumer:
+                on_missing: allow
+
+      # Unmatched principals borrow the anonymous consumer's policy.
+      - name: anonymous-fallback
+        paths: ["/anonymous-fallback"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              anonymous: guest
+              denied_principals: ["mallory@EXAMPLE.TEST"]
+              consumer:
+                on_missing: anonymous
+
+      # Map by custom_id instead of username.
+      - name: custom-id
+        paths: ["/custom-id"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              consumer:
+                by: custom_id
+                template: "${user}"
+
+      # Keep the realm in the consumer lookup key.
+      - name: full-principal
+        paths: ["/full-principal"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              strip_realm: false
+
+      # Only principals from a realm this KDC does not serve.
+      - name: wrong-realm
+        paths: ["/wrong-realm"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              realm: OTHER.TEST
+
+      - name: deny-list
+        paths: ["/deny-list"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              denied_principals: ["mallory@EXAMPLE.TEST"]
+              consumer:
+                on_missing: allow
+
+      - name: allow-list
+        paths: ["/allow-list"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              allowed_principals: ["~^(alice|dave)@EXAMPLE\\.TEST$"]
+              consumer:
+                on_missing: allow
+
+      - name: hide-credentials
+        paths: ["/hide-credentials"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              hide_credentials: true
+
+      - name: no-challenge
+        paths: ["/no-challenge"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              challenge_on_missing: false
+
+      - name: token-cache
+        paths: ["/token-cache"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              cache:
+                enabled: true
+                ttl: 30
+
+      # Accept any principal in the keytab (no service_principal pinned).
+      - name: any-service-principal
+        paths: ["/any-service-principal"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+
+      # kerberos-auth feeding the ACL plugin.
+      - name: acl
+        paths: ["/acl"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              krb5_config: /etc/krb5.conf
+          - name: acl
+            config:
+              allow: ["admins"]
+
+      # kerberos-auth feeding per-consumer rate limiting.
+      - name: rate-limited
+        paths: ["/rate-limited"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              krb5_config: /etc/krb5.conf
+          - name: rate-limiting
+            config:
+              minute: 3
+              policy: local
+              limit_by: consumer
+
+
+      # config.anonymous alone: a request that cannot authenticate at all
+      # proceeds as the anonymous consumer instead of being challenged. This is
+      # the standard Kong auth plugin semantic.
+      - name: anonymous-open
+        paths: ["/anonymous-open"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              anonymous: guest
+
+      # The canonical Kong multi-auth recipe: every auth plugin on the route
+      # shares one anonymous consumer, so whichever succeeds first wins and an
+      # unauthenticated caller falls through as `guest`. Note the Kerberos
+      # trade-off: with anonymous set, kerberos-auth answers 200 rather than a
+      # 401 challenge, so only clients that send a token unprompted negotiate.
+      - name: chained-auth
+        paths: ["/chained-auth"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: key-auth
+            config:
+              anonymous: guest
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              anonymous: guest
+
+      # The stricter arrangement: kerberos-auth has no anonymous of its own, so
+      # it never stands down and always challenges. An API key alone is not
+      # enough here.
+      - name: chained-strict
+        paths: ["/chained-strict"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: key-auth
+            config:
+              anonymous: guest
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+
+  # A Kerberos protected upstream for the Kong -> upstream (initiator) leg.
+  - name: secure
+    url: http://secure.example.test
+    routes:
+      # Kong forwards the caller's delegated credential, so the upstream sees
+      # the original user.
+      - name: upstream-delegated
+        paths: ["/upstream-delegated"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              consumer:
+                on_missing: allow
+              upstream:
+                enabled: true
+                use_delegated_credential: true
+
+      # Kong authenticates as itself, regardless of who called.
+      - name: upstream-self
+        paths: ["/upstream-self"]
+        strip_path: true
+        protocols: ["http", "https"]
+        plugins:
+          - name: kerberos-auth
+            config:
+              keytab: /keytabs/kong.keytab
+              service_principal: HTTP@kong.example.test
+              consumer:
+                on_missing: allow
+              upstream:
+                enabled: true
+                use_delegated_credential: false
+                client_principal: kong-client@EXAMPLE.TEST
+                service_principal: HTTP@secure.example.test
+
+consumers:
+  - username: alice
+    keyauth_credentials:
+      - key: alice-api-key
+    acls:
+      - group: admins
+
+  - username: dave
+
+  # Matched by the full principal on the /full-principal route.
+  - username: alice@EXAMPLE.TEST
+
+  # Matched by custom_id on the /custom-id route.
+  - username: krb-carol
+    custom_id: carol
+
+  - username: guest

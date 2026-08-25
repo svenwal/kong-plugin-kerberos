@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    container: ghcr.io/lunarmodules/luacheck:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: luacheck kong/
+
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kong_image:
+          - kong/kong-gateway:3.14
+          - kong/kong:3.9
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the end to end suite
+        env:
+          KONG_IMAGE: ${{ matrix.kong_image }}
+        run: |
+          docker compose -f test/docker-compose.yml build
+          docker compose -f test/docker-compose.yml up -d kdc upstream upstream-krb kong
+          docker compose -f test/docker-compose.yml run --rm client
+
+      - name: Kong logs on failure
+        if: failure()
+        run: docker compose -f test/docker-compose.yml logs kong
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/docker-compose.yml down -v
