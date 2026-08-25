@@ -8,10 +8,15 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    container: ghcr.io/lunarmodules/luacheck:latest
     steps:
       - uses: actions/checkout@v4
-      - run: luacheck kong/
+
+      # Run luacheck via `docker run` rather than as a job-level `container:`.
+      # The image is built on an Alpine whose musl predates pthread_getname_np,
+      # so the runner's Node binary cannot execute inside it and every
+      # javascript action (including actions/checkout) fails to start.
+      - name: Run luacheck
+        run: docker run --rm -v "$PWD:/work" -w /work ghcr.io/lunarmodules/luacheck:latest kong/
 
   e2e:
     runs-on: ubuntu-latest
