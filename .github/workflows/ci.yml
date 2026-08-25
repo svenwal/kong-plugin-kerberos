@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Run luacheck via `docker run` rather than as a job-level `container:`.
       # The image is built on an Alpine whose musl predates pthread_getname_np,
@@ -27,7 +27,7 @@ jobs:
           - kong/kong-gateway:3.14
           - kong/kong:3.9
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run the end to end suite
         env:
